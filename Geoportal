@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Geoportal simple – Supabase + Leaflet</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root{
+      --bg:#0d1117; --card:#161b22; --border:#30363d; --text:#e6edf3; --muted:#8b949e;
+      --accent:#58a6ff; --ok:#2ea043; --err:#f85149;
+    }
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:system-ui,Segoe UI,Roboto,sans-serif}
+    .wrap{display:grid;grid-template-columns:420px 1fr;gap:12px;height:100%;padding:12px;box-sizing:border-box}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;box-sizing:border-box;overflow:auto}
+    h1{font-size:18px;margin:0 0 8px;color:var(--accent)}
+    p{margin:0 0 12px;color:var(--muted);line-height:1.35;font-size:13px}
+    label{font-size:12px;color:var(--muted);display:block;margin:10px 0 4px}
+    input{width:100%;padding:9px 10px;border-radius:10px;background:var(--bg);border:1px solid var(--border);color:var(--text);box-sizing:border-box}
+    input::placeholder{color:#6e7681}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .btns{display:flex;gap:10px;margin-top:10px;flex-wrap:wrap}
+    button{cursor:pointer;padding:9px 12px;border-radius:10px;border:1px solid var(--border);background:#21262d;color:var(--text)}
+    button.primary{background:var(--ok);border:none;color:#fff;font-weight:600}
+    .status{margin-top:8px;font-size:12px;color:var(--muted)}
+    .status.ok{color:var(--ok)}
+    .status.err{color:var(--err)}
+
+    .list{margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px}
+    .pill{background:var(--bg);border:1px solid var(--border);padding:9px 12px;border-radius:999px;display:flex;align-items:center;gap:8px}
+    .pill:hover{border-color:#4b5563}
+    .pill strong{font-size:13px}
+    .pill small{opacity:.7}
+
+    #preview{margin-top:12px;border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--bg);display:none}
+    #preview h3{margin:0 0 8px;color:var(--muted);font-size:13px}
+    table{width:100%;border-collapse:collapse}
+    th,td{border:1px solid var(--border);padding:6px 8px;text-align:left;font-size:12px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    th{background:var(--card);color:#c9d1d9}
+    em.null{color:#6e7681}
+
+    #mapCard{padding:0;overflow:hidden}
+    #map{height:100%;min-height:420px}
+    .mapbar{position:absolute;top:14px;right:14px;z-index:999;background:rgba(13,17,23,.92);border:1px solid var(--border);border-radius:12px;padding:10px;max-width:360px}
+    .mapbar .title{font-size:12px;color:var(--muted);margin:0 0 6px}
+    .mapbar code{color:var(--text)}
+    .mapbar .hint{font-size:12px;color:var(--muted);margin:0}
+    .spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.2);border-top-color:var(--ok);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    @media (max-width: 980px){
+      .wrap{grid-template-columns:1fr;grid-template-rows:auto 1fr}
+      #map{min-height:50vh}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card" id="left">
+      <h1>🗺️ Geoportal simple (Supabase + Leaflet)</h1>
+      <p>
+        1) Pega tu <strong>Supabase URL</strong> y tu <strong>anon API key</strong>.
+        2) Pulsa <em>Leer tablas</em>.
+        3) Haz click en una tabla y pulsa <em>Cargar en mapa</em>.
+      </p>
+
+      <label for="url">Supabase URL</label>
+      <input id="url" placeholder="https://YOUR-PROJECT.supabase.co" />
+
+      <div class="row">
+        <div>
+          <label for="key">API Key (anon)</label>
+          <input id="key" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." />
+        </div>
+        <div>
+          <label for="schema">Esquema</label>
+          <input id="schema" placeholder="public" value="public" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="geomcol">Columna geom (por defecto)</label>
+          <input id="geomcol" placeholder="geom" value="geom" />
+        </div>
+        <div>
+          <label for="limit">Límite features (mapa)</label>
+          <input id="limit" placeholder="2000" value="2000" />
+        </div>
+      </div>
+
+      <div class="btns">
+        <button id="btn" class="primary">Leer tablas</button>
+        <button id="btnLoad" disabled>Cargar en mapa</button>
+        <button id="btnClear">Limpiar</button>
+      </div>
+
+      <div id="status" class="status"></div>
+
+      <div id="out" class="list"></div>
+      <div id="layerBox" style="margin-top:12px;display:none">
+        <label for="layerSelect">Capas disponibles</label>
+        <select id="layerSelect" style="width:100%;padding:9px 10px;border-radius:10px;background:var(--bg);border:1px solid var(--border);color:var(--text);box-sizing:border-box">
+          <option value="">— Selecciona una capa —</option>
+        </select>
+        <div style="margin-top:6px;color:var(--muted);font-size:12px" id="layerMeta"></div>
+      </div>
+      <div id="preview"></div>
+
+      <p style="margin-top:12px;color:var(--muted);font-size:12px">
+        Nota: para pintar geometrías, intentamos primero <code>Accept: application/geo+json</code> (PostgREST).
+        Si tu tabla no tiene permisos (RLS), verás 401/403.
+      </p>
+    </div>
+
+    <div class="card" id="mapCard">
+      <div id="map"></div>
+      <div class="mapbar" id="mapbar">
+        <p class="title">Capa cargada</p>
+        <p class="hint">Ninguna. Selecciona una tabla a la izquierda y pulsa <b>Cargar en mapa</b>.</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const $ = (s)=>document.querySelector(s);
+    const btn=$('#btn'), btnClear=$('#btnClear'), btnLoad=$('#btnLoad');
+    const status=$('#status'), out=$('#out'), preview=$('#preview');
+    const layerBox=$('#layerBox'), layerSelect=$('#layerSelect'), layerMeta=$('#layerMeta');
+    const mapbar=$('#mapbar');
+
+    let selectedTable = null;
+
+    // Mapeo opcional de capas -> columna geom y tipo (según tu inventario PostGIS)
+    // Puedes añadir más capas aquí:  { geom: '...', tipologia: 'punto|línea|polígono', srid: 4326, geomType: '...' }
+    const LAYER_HINTS = {
+      "Concejos_Asturias_OFICIAL": { geom: "geom", tipologia: "polígono", srid: 4326, geomType: "MultiPolygon" },
+      "LineasElect_4326": { geom: "the_geom", tipologia: "línea", srid: 4326, geomType: "MultiLineString" }
+    };
+
+    function populateLayerSelector(tableNames){
+      const names = (tableNames || []).slice();
+      // mostrar selector siempre que haya tablas
+      if(names.length){
+        layerBox.style.display = 'block';
+      } else {
+        layerBox.style.display = 'none';
+      }
+
+      // Creamos opciones: primero las que tengan hint (en orden), luego el resto
+      const hinted = Object.keys(LAYER_HINTS).filter(n => names.includes(n));
+      const rest = names.filter(n => !hinted.includes(n));
+      const ordered = [...hinted, ...rest];
+
+      layerSelect.innerHTML = '<option value="">— Selecciona una capa —</option>' +
+        ordered.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+
+      // Selección por defecto: primera hinted si existe
+      if(hinted.length){
+        layerSelect.value = hinted[0];
+        applyLayerSelection(hinted[0]);
+      } else {
+        layerSelect.value = '';
+        layerMeta.textContent = '';
+      }
+    }
+
+    function applyLayerSelection(name){
+      if(!name){ 
+        selectedTable = null; 
+        btnLoad.disabled = true;
+        layerMeta.textContent = '';
+        return;
+      }
+      selectedTable = name;
+      btnLoad.disabled = false;
+
+      // Si tenemos pista para esa capa, auto-rellenamos geomcol
+      const hint = LAYER_HINTS[name];
+      if(hint && hint.geom){
+        $('#geomcol').value = hint.geom;
+        layerMeta.textContent = `Geom: ${hint.geom} · ${hint.tipologia || hint.geomType || ''} · SRID: ${hint.srid || ''}`;
+      } else {
+        layerMeta.textContent = '';
+      }
+    }
+
+    layerSelect.addEventListener('change', (e)=>applyLayerSelection(e.target.value));
+
+
+    function setStatus(m, cls=''){ status.className = 'status ' + (cls||''); status.textContent = m || ''; }
+    function normalizeUrl(u){ try { return new URL((u||'').trim()).origin; } catch { return (u||'').trim(); } }
+    function clearOutput(){
+      out.innerHTML='';
+      preview.style.display='none';
+      preview.innerHTML='';
+      setStatus('');
+      selectedTable = null;
+      btnLoad.disabled = true;
+      if(layerSelect){ layerSelect.value=''; }
+      if(layerMeta){ layerMeta.textContent=''; }
+      if(layerBox){ layerBox.style.display='none'; }
+    }
+    function tableNameFromPath(p){
+      if(!p || p.includes('{')) return null;
+      let n = p.replace(/^\//,'');
+      if(!n || n.startsWith('rpc/')) return null;
+      return n;
+    }
+    function dedupe(a){ return [...new Set(a.filter(Boolean))].sort(); }
+
+    async function fetchOpenAPI(baseUrl, apiKey){
+      const r = baseUrl.replace(/\/$/,'') + '/rest/v1/';
+      const h = { apikey: apiKey, Authorization: 'Bearer ' + apiKey, Accept: 'application/openapi+json' };
+      let x = await fetch(r, { headers: h });
+      if(x.ok) return x.json();
+      x = await fetch(r.replace(/\/$/, ''), { headers: h });
+      if(!x.ok) throw new Error('No se pudo obtener OpenAPI');
+      return x.json();
+    }
+
+    function escapeHtml(s){
+      return String(s)
+        .replaceAll('&','&amp;')
+        .replaceAll('<','&lt;')
+        .replaceAll('>','&gt;')
+        .replaceAll('"','&quot;')
+        .replaceAll("'",'&#039;');
+    }
+    function summarizeValue(v){
+      if(v===null || v===undefined) return '<em class="null">null</em>';
+      if(typeof v==='object') return '[object]';
+      let s = String(v);
+      if(s.length>200) s = s.slice(0,200)+'…';
+      return escapeHtml(s);
+    }
+
+    function renderTables(paths, schema){
+      const raw = Object.keys(paths || {});
+      let names = raw.map(tableNameFromPath).filter(Boolean);
+
+      // Filtrado por schema en nombres tipo public.tabla si aparecen
+      const sc = (schema || 'public').trim() || 'public';
+      const pretty = dedupe(names)
+        .map(n => n.replace(/^public\./,''))
+        .filter(n => {
+          // Si viene ya sin schema, lo aceptamos
+          // Si viniera con schema (raro en OpenAPI de supabase), filtramos
+          return !n.includes('.') || n.startsWith(sc + '.');
+        })
+        .map(n => n.replace(new RegExp('^' + sc.replace(/[.*+?^${}()|[\\]\\]/g,'\\$&') + '\\.'), ''));
+
+      if(!pretty.length){
+        out.innerHTML = '<span class="status">No se encontraron tablas.</span>';
+        return;
+      }
+
+      populateLayerSelector(pretty);
+
+      out.innerHTML = pretty.map(n => `
+        <div class="pill" data-table="${escapeHtml(n)}" title="${escapeHtml(n)}">
+          📄 <strong>${escapeHtml(n)}</strong>
+          <small>&nbsp;tabla/vista</small>
+        </div>
+      `).join('');
+
+      out.querySelectorAll('.pill').forEach(p => {
+        p.addEventListener('click', async () => {
+          out.querySelectorAll('.pill').forEach(x => x.style.outline = '');
+          p.style.outline = '2px solid ' + getComputedStyle(document.documentElement).getPropertyValue('--accent');
+
+          const t = p.dataset.table;
+          if(layerSelect){ layerSelect.value = t; }
+          applyLayerSelection(t);
+
+          const baseUrl = normalizeUrl($('#url').value || '');
+          const apiKey  = ($('#key').value || '').trim();
+          if(!baseUrl || !apiKey){ setStatus('Ingresa URL y API Key.', 'err'); return; }
+
+          await previewTabla(baseUrl, apiKey, selectedTable);
+        });
+      });
+    }
+
+    async function previewTabla(baseUrl, apiKey, table){
+      preview.style.display='block';
+      preview.innerHTML = `<h3>Mostrando 5 filas de <code>${escapeHtml(table)}</code> <span class="spinner"></span></h3>`;
+      setStatus(`Cargando ${table}…`);
+
+      try{
+        const url = baseUrl.replace(/\/$/,'') + `/rest/v1/${encodeURIComponent(table)}?select=*&limit=5`;
+        const r = await fetch(url, {
+          headers: { apikey: apiKey, Authorization: 'Bearer ' + apiKey, Accept: 'application/json' }
+        });
+        if(!r.ok){
+          const txt = await r.text();
+          throw new Error(`HTTP ${r.status}: ${txt}`);
+        }
+        const d = await r.json();
+
+        let html = `<h3>Mostrando 5 filas de <code>${escapeHtml(table)}</code></h3>`;
+        if(!d.length){
+          html += '<p class="status">— Sin datos —</p>';
+        } else {
+          const cols = [...new Set(d.flatMap(o => Object.keys(o || {})))].sort();
+          html += '<table><thead><tr>' + cols.map(c => `<th>${escapeHtml(c)}</th>`).join('') + '</tr></thead><tbody>';
+          d.slice(0,5).forEach(rw => {
+            html += '<tr>' + cols.map(c => `<td>${summarizeValue(rw[c])}</td>`).join('') + '</tr>';
+          });
+          html += '</tbody></table>';
+        }
+
+        preview.innerHTML = html;
+        setStatus(`Listo: ${table}`, 'ok');
+      } catch(e){
+        preview.innerHTML = `<h3>Error</h3><div class="status err">${escapeHtml(e.message)}</div>`;
+        setStatus('Error', 'err');
+      }
+    }
+
+    // ---------------- MAP ----------------
+    const map = L.map('map').setView([43.36, -5.85], 8);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+    let currentLayer = null;
+
+    function setMapbar(table, msg){
+      mapbar.innerHTML = `
+        <p class="title">Capa cargada</p>
+        <p class="hint"><code>${escapeHtml(table || '—')}</code><br>${escapeHtml(msg || '')}</p>
+      `;
+    }
+
+    async function loadOnMap(baseUrl, apiKey, table, geomCol, limit){
+      if(currentLayer){ map.removeLayer(currentLayer); currentLayer = null; }
+      setMapbar(table, 'Cargando…');
+      setStatus(`Cargando en mapa: ${table}…`);
+
+      // Intento 1: pedir GeoJSON directamente a PostgREST
+      // Nota: Para que funcione bien, el SELECT debe incluir la columna geom.
+      const qs = `select=*&limit=${encodeURIComponent(limit)}&order=id.asc`;
+      const url = baseUrl.replace(/\/$/,'') + `/rest/v1/${encodeURIComponent(table)}?${qs}`;
+
+      let geojson = null;
+
+      // A) application/geo+json
+      try{
+        const r = await fetch(url, {
+          headers: {
+            apikey: apiKey,
+            Authorization: 'Bearer ' + apiKey,
+            Accept: 'application/geo+json'
+          }
+        });
+        if(r.ok){
+          const gj = await r.json();
+          // PostgREST devuelve FeatureCollection cuando Accept es geo+json
+          if(gj && gj.type === 'FeatureCollection') geojson = gj;
+        }
+      } catch(e) {
+        // seguimos con fallback
+      }
+
+      // B) Fallback: JSON normal, intentando convertir si geom ya viene como GeoJSON
+      if(!geojson){
+        const r = await fetch(url, {
+          headers: {
+            apikey: apiKey,
+            Authorization: 'Bearer ' + apiKey,
+            Accept: 'application/json'
+          }
+        });
+        if(!r.ok){
+          const txt = await r.text();
+          throw new Error(`HTTP ${r.status}: ${txt}`);
+        }
+        const rows = await r.json();
+
+        // Si geom viene como objeto GeoJSON o como string GeoJSON, lo convertimos.
+        const features = (rows || []).map(row => {
+          let geom = row?.[geomCol];
+          if(typeof geom === 'string'){
+            // podría ser WKT, EWKB, o GeoJSON string. Probamos GeoJSON.
+            try { geom = JSON.parse(geom); } catch { /* ignore */ }
+          }
+          if(!geom || !geom.type || !('coordinates' in geom)) return null;
+
+          const props = {...row};
+          delete props[geomCol];
+          return { type: 'Feature', geometry: geom, properties: props };
+        }).filter(Boolean);
+
+        geojson = { type: 'FeatureCollection', features };
+      }
+
+      if(!geojson || !geojson.features || !geojson.features.length){
+        setMapbar(table, 'No se pudo construir GeoJSON. Suele ser porque la geometría no viene como GeoJSON o falta una vista ST_AsGeoJSON().');
+        setStatus('No se pudo dibujar la capa. Ver nota.', 'err');
+        return;
+      }
+
+      currentLayer = L.geoJSON(geojson, {
+        onEachFeature: (f, layer) => {
+          const p = f.properties || {};
+          const keys = Object.keys(p);
+          const html = keys.slice(0, 12).map(k => `<b>${escapeHtml(k)}</b>: ${escapeHtml(p[k] ?? '')}`).join('<br>');
+          layer.bindPopup(html || 'Sin atributos');
+        }
+      }).addTo(map);
+
+      try { map.fitBounds(currentLayer.getBounds(), { padding: [20,20] }); } catch {}
+      setMapbar(table, `Features: ${geojson.features.length}`);
+      setStatus(`Cargado: ${table}`, 'ok');
+    }
+
+    // ---------------- UI events ----------------
+    btn.addEventListener('click', async () => {
+      clearOutput();
+      const baseUrl = normalizeUrl($('#url').value || '');
+      const apiKey  = ($('#key').value || '').trim();
+      const schema  = ($('#schema').value || 'public').trim() || 'public';
+      if(!baseUrl || !apiKey){ setStatus('Ingresa URL y API Key.', 'err'); return; }
+
+      try{
+        setStatus('Consultando OpenAPI…');
+        const spec = await fetchOpenAPI(baseUrl, apiKey);
+        if(!spec.paths) throw new Error('OpenAPI sin paths');
+        renderTables(spec.paths, schema);
+        setStatus('Listo. Selecciona una tabla.', 'ok');
+      } catch(e){
+        setStatus('Error: ' + e.message, 'err');
+      }
+    });
+
+    btnLoad.addEventListener('click', async () => {
+      const baseUrl = normalizeUrl($('#url').value || '');
+      const apiKey  = ($('#key').value || '').trim();
+      const geomCol = ($('#geomcol').value || 'geom').trim() || 'geom';
+      const limit   = parseInt($('#limit').value || '2000', 10);
+
+      if(!selectedTable){ setStatus('Selecciona una tabla primero.', 'err'); return; }
+      if(!baseUrl || !apiKey){ setStatus('Ingresa URL y API Key.', 'err'); return; }
+
+      try{
+        await loadOnMap(baseUrl, apiKey, selectedTable, geomCol, Number.isFinite(limit) ? limit : 2000);
+      } catch(e){
+        setStatus('Error: ' + e.message, 'err');
+        setMapbar(selectedTable, e.message);
+      }
+    });
+
+    btnClear.addEventListener('click', () => {
+      clearOutput();
+      if(currentLayer){ map.removeLayer(currentLayer); currentLayer = null; }
+      setMapbar('', 'Ninguna. Selecciona una tabla a la izquierda y pulsa Cargar en mapa.');
+    });
+
+    // Mensaje inicial
+    setMapbar('', 'Ninguna. Selecciona una tabla a la izquierda y pulsa Cargar en mapa.');
+  </script>
+</body>
+</html>
